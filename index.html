@@ -27,20 +27,24 @@
     </div>
     <div style = "width: 100%">
         <!-- Game -->
-        <div id = "gamePanel">
+        <div id = "gamePanel" hidden = "true">
             <p id = "turnLabel"> Your Turn </p>
             <div id = "gameChatPanel">
                 
             </div>
             <div id = "playPanel">
-                <button id = "cardSubmitButton">submit</button>
-                <div id = "cardPanel">
+                <div id = "pilePanel">
+                </div>
+                <div id = "cardPanel"></div>
+                <div>
+                    <button id = "cardSubmitButton">submit</button>
+                    <button id = "drawButton">draw</button>
                 </div>
             </div>
         </div>
     
         <!-- Lobby -->
-        <div id = "lobbyPanel" hidden = "true">
+        <div id = "lobbyPanel">
             <div>
                 <div style = "width: 70%;">
                     <button id="copyLinkButton">

@@ -36,6 +36,7 @@ html, body {
 #cardPanel {
     display: flex;
     flex-direction: row;
+    height: 100px;
 }
 
 #cardPanel > div {
@@ -56,4 +57,15 @@ html, body {
 #gameChatPanel {
     height: 100%;
     background-color: red;
+}
+
+#pilePanel {
+    display: flex;
+    flex-direction: row;
+}
+
+#pilePanel > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }

@@ -1,6 +1,6 @@
-import { gameUser, initGame, nextTurn, runAction, sendGameUpdate, sendPlay, turn } from './game.js';
+import { Pile, gameUser, getClientSideGameUpdate, initGame, nextTurn, piles, requestPileAdd, runPlayerAddToPile, sendGameUpdate, turn, turnState } from './game.js';
 import { addMessage } from './log.js';
-import { initUser, users, peer, broadcastMessage, isHost, broadcast } from './networking.js';
+import { initUser, users, peer, broadcastMessage, isHost, broadcast, host } from './networking.js';
 //@ts-ignore
 let b = bootstrap;
 document.addEventListener("DOMContentLoaded", () => {
@@ -36,7 +36,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     // init copy link
     document.getElementById("copyLinkButton").onclick = function () {
-        navigator.clipboard.writeText(window.location.href + "?host=" + peer.id);
+        navigator.clipboard.writeText(location.protocol + '//' + location.host + location.pathname + "?host=" + host);
         b.Toast.getOrCreateInstance(document.getElementById("copiedToast")).show();
     };
     // ask for name
@@ -48,11 +48,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // card submit init
     document.getElementById("cardSubmitButton").onclick = () => {
         let cardIndices = Array.from(document.getElementById("cardPanel").querySelectorAll("input")).map((c, i) => [i, c]).filter(c => c[1].checked).map(c => c[0]);
-        let isSuccessful = sendPlay(cardIndices);
+        let isSuccessful = requestPileAdd("discard", cardIndices);
         if (isSuccessful) {
             document.getElementById("cardSubmitButton").disabled = true;
             if (isHost) {
-                runAction(cardIndices, gameUser.user.id);
+                runPlayerAddToPile(peer.id, "discard", cardIndices);
                 nextTurn();
                 updatePlayPanel();
                 sendGameUpdate();
@@ -61,6 +61,9 @@ document.addEventListener("DOMContentLoaded", () => {
         else {
             b.Toast.getOrCreateInstance(document.getElementById("illegalPlayToast")).show();
         }
+    };
+    // card draw init
+    document.getElementById("drawButton").onclick = () => {
     };
 });
 export function updateUserPanel(users, user) {
@@ -105,6 +108,7 @@ export function updatePlayPanel() {
     else {
         turnLabel.innerText = users.get(turn).name + "'s Turn";
     }
+    updatePiles();
 }
 export function startGame() {
     document.getElementById("lobbyPanel").hidden = true;
@@ -123,4 +127,27 @@ export function updateLobbyPanel() {
     if (isHost && users.size > 1) {
         document.getElementById("startGameButton").disabled = false;
     }
+}
+function updatePiles() {
+    let actualPiles = isHost ? new Map(getClientSideGameUpdate().piles.map(([string, cards]) => {
+        let pile = new Pile(string, Pile.CLIENT_SHOWN(1, cards[0] !== null));
+        pile.addCards(...cards);
+        return [string, pile];
+    })) : piles;
+    document.getElementById("pilePanel").replaceChildren(...[...actualPiles.entries()].map(([k, v]) => {
+        let button = document.createElement("button");
+        let label = document.createElement("label");
+        let div = document.createElement("div");
+        let pile = v;
+        button.innerText = pile.size > 1 ? "..." : pile.pile[0].toString;
+        button.onclick = () => {
+            if (peer.id != turn || turnState != "draw") {
+                return;
+            }
+        };
+        label.innerText = k;
+        div.appendChild(button);
+        div.appendChild(label);
+        return div;
+    }));
 }

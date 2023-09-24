@@ -1,12 +1,13 @@
-import { nextTurn, readGameUpdate, runAction, sendGameUpdate } from "./game.js";
+import { nextTurn, playerDraw, readGameUpdate, runPlayerAddToPile, runPlayerRemoveFromPile, sendGameUpdate } from "./game.js";
 import { addMessage } from "./log.js";
 import { startGame, updateLobbyPanel, updatePlayPanel, updateUserPanel } from "./ui.js";
-const dataTypes = ["message", "userInit", "userData", "discard", "play", "draw", "gameUpdate", "startGame"];
+const dataTypes = ["message", "userInit", "userData", "pileAdd", "pileRemove", "play", "gameUpdate", "startGame"];
 let connections = new Map();
 export let users = new Map();
 export let isHost = null;
 let conn = null;
 export let peer = null;
+export let host = null;
 export function initUser(name) {
     //@ts-ignore
     peer = new Peer({ debug: 3 });
@@ -18,11 +19,13 @@ export function initUser(name) {
         if (q == null) {
             peer.on('connection', onUserJoin);
             isHost = true;
+            host = peer.id;
             updateLobbyPanel();
             updateUserPanel(users, id);
         }
         else {
             conn = peer.connect(q);
+            host = conn.peer;
             conn.on('open', function () {
                 conn.send({
                     source: id,
@@ -44,6 +47,7 @@ export function initUser(name) {
                 }
                 else if (data.type == "gameUpdate") {
                     readGameUpdate(JSON.parse(data.value));
+                    updatePlayPanel();
                 }
                 else if (data.type == "startGame") {
                     startGame();
@@ -81,9 +85,20 @@ let onUserJoin = (c) => {
                 value: JSON.stringify([...users])
             }));
         }
-        else if (data.type == "play") { // we get play info
-            runAction(JSON.parse(data.value), data.source);
-            nextTurn();
+        else if (data.type == "pileAdd") { // we get play info
+            runPlayerAddToPile(data.source, data.value.pile, JSON.parse(data.value.indices));
+            updatePlayPanel();
+            sendGameUpdate();
+        }
+        else if (data.type == "pileRemove") {
+            runPlayerRemoveFromPile(data.source, data.value.pile, data.value.number);
+            nextTurn(); // check turn flow and next turn TODO
+            updatePlayPanel();
+            sendGameUpdate();
+        }
+        else if (data.type == "draw") {
+            playerDraw(data.source);
+            nextTurn(); // check turn flow and next turn TODO
             updatePlayPanel();
             sendGameUpdate();
         }
@@ -113,7 +128,7 @@ export let broadcastMessage = (message) => {
         value: message
     });
 };
-export let sendDAtaMessage = (id, data) => {
+export let sendDataMessage = (id, data) => {
     connections.get(id).send(data);
 };
 export let broadcast = (data) => {

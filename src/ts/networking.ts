@@ -1,14 +1,15 @@
-import { initGame, nextTurn, readGameUpdate, runAction, sendGameUpdate } from "./game.js";
+import { nextTurn, playerDraw, readGameUpdate, runPlayerAddToPile, runPlayerRemoveFromPile, sendGameUpdate } from "./game.js";
 import { addMessage } from "./log.js";
 import { startGame, updateLobbyPanel, updatePlayPanel, updateUserPanel } from "./ui.js";
 
-const dataTypes = ["message", "userInit", "userData", "discard", "play", "draw", "gameUpdate", "startGame"] as const
+const dataTypes = ["message", "userInit", "userData", "pileAdd", "pileRemove", "play", "gameUpdate", "startGame"] as const
 
 let connections = new Map<string, any>()
 export let users = new Map<string, User>()
 export let isHost = null
 let conn = null
 export let peer = null
+export let host = null
 
 export function initUser(name: string) {
     //@ts-ignore
@@ -21,10 +22,12 @@ export function initUser(name: string) {
         if (q == null) {
             peer.on('connection', onUserJoin);
             isHost = true
+            host = peer.id
             updateLobbyPanel()
             updateUserPanel(users, id)
         } else {
             conn = peer.connect(q);
+            host = conn.peer
             conn.on('open', function() {
                 conn.send({
                     source: id,
@@ -45,6 +48,7 @@ export function initUser(name: string) {
                     updateUserPanel(users, peer.id)
                 } else if (data.type == "gameUpdate") { 
                     readGameUpdate(JSON.parse(data.value))
+                    updatePlayPanel()
                 } else if (data.type == "startGame") {
                     startGame()
                 }
@@ -83,12 +87,21 @@ let onUserJoin = (c) => { // runs only for host
                     value: JSON.stringify([...users])
                 })
             )
-        } else if (data.type == "play") { // we get play info
-            runAction(JSON.parse(data.value), data.source)
-            nextTurn()
+        } else if (data.type == "pileAdd") { // we get play info
+            runPlayerAddToPile(data.source, data.value.pile, JSON.parse(data.value.indices))
             updatePlayPanel()
             sendGameUpdate()
-        }
+        } else if (data.type == "pileRemove") {
+            runPlayerRemoveFromPile(data.source, data.value.pile, data.value.number)
+            nextTurn() // check turn flow and next turn TODO
+            updatePlayPanel()
+            sendGameUpdate()
+        } else if (data.type == "draw") {
+            playerDraw(data.source)
+            nextTurn() // check turn flow and next turn TODO
+            updatePlayPanel()
+            sendGameUpdate()
+        } 
     }); 
     c.on('close', function() {
         users.delete(c.peer)
