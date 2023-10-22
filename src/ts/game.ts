@@ -2,14 +2,15 @@ import { setTokenSourceMapRange } from "typescript";
 import { DataMessage, User, broadcast, isHost, message, peer, sendDataMessage, users } from "./networking.js";
 import { updatePlayPanel } from "./ui.js";
 
-const turnStates = ["draw", "discard", "play"] as const
+const turnStates = ["draw", "discard", "play", "wait"] as const
 export let turnState;
 let GameSettings = {
     startingCards: 7,
     maxPlayers: -1,
     verifiers: new Set() as Set<Verifier>,
     playToDiscard: true,
-    turnFlow: [["discard"], ["draw"]] as typeof turnStates[number][][]
+    turnFlow: [["discard"], ["draw"]] as typeof turnStates[number][][],
+    delayedDiscard: true
 }
 export let deck: Deck
 export let gameUser: GameUser;
@@ -21,8 +22,10 @@ export type GameUpdate = {
     peers: GamePeer[],
     piles: [string, Card[]][]
     turn: string
+    turnState: typeof turnStates[number]
 }
 export let piles: Map<string, Pile> = new Map()
+let cardDiscards: [Pile, Card[]][] = []; // only if delayedDiscard is on
 
 const CONST_VERIFIERS = {
     RANGE_RUN: (min: number, max: number) => {
@@ -111,6 +114,7 @@ type PileSettings = {
     behavior: "QUEUE" | "STACK"
     showFaces: boolean
     verify: boolean
+    removeInOrder: boolean
 }
 
 export class Pile {
@@ -138,11 +142,20 @@ export class Pile {
         this.pile = this.pile.concat(cards)
     }
 
-    removeCards(n: number) {
+    removeCardsInOrder(n: number) {
         if (n > this.pile.length) {
             throw Error("Illegal draw, pile " + this.name + " had " + this.pile.length + " cards but tried to draw " + n + " cards.")
         }
         return [...Array(n)].map(n => this.#remover())
+    }
+
+    removeCards(cards: number[]) {
+        return cards.reverse().map(c => {
+            if (c > this.pile.length) {
+                throw Error("Illegal play of card, index out of bounds")
+            }
+            return this.pile.splice(c, 1)[0]
+        })
     }
 
     shuffleCards() {
@@ -154,7 +167,8 @@ export class Pile {
             topVisible: -1,
             behavior: "QUEUE",
             showFaces: false,
-            verify: false
+            verify: false,
+            removeInOrder: true
         }   
     }
 
@@ -162,8 +176,9 @@ export class Pile {
         return {
             topVisible: numberShown,
             behavior: "QUEUE",
-            showFaces: true,
-            verify: false
+            showFaces: showFaces,
+            verify: false,
+            removeInOrder: false
         }   
     }
 
@@ -208,7 +223,7 @@ class Deck extends Pile{
         if (n > this.size) {
             throw Error("Illegal draw, deck had " + this.size + " cards but tried to draw " + n + " cards.")
         }
-        return [...Array(n)].map(n => this.removeCards(1)[0])
+        return [...Array(n)].map(n => this.removeCardsInOrder(1)[0])
     }
 
 }
@@ -288,7 +303,9 @@ export function initGame() {
         deck = Deck.createDeck
         deck.shuffleCards()
         turn = [...users.entries()][1][0]
+        turnState = GameSettings.turnFlow[0]
     }
+    console.log(turn)
     // verifiers
     GameSettings.verifiers.add(CONST_VERIFIERS.RANGE_RUN(3, -1))
     GameSettings.verifiers.add(CONST_VERIFIERS.SINGLE_CARD)
@@ -320,7 +337,8 @@ export function initGame() {
         topVisible: 1,
         behavior: "STACK",
         showFaces: true,
-        verify: false
+        verify: false,
+        removeInOrder: true
     })
     discard.addCards(drawnCard)
     piles.set("draw", deck)
@@ -336,27 +354,8 @@ export function initGame() {
 }
 
 // run only by host
-export function playerDraw(source: string) {
-    if (!isHost) {
-        throw Error("Illegal client access to playerDraw()")
-    }
-    let user: GameUser;
-    if (source == peer.id) {
-        user = gameUser
-    } else {
-        user = otherGameUsers.get(source)
-    }
-    if (deck.size == 0) {
-        return false
-    } else {
-        let card = deck.removeCards(1)[0]
-        user.addToHand(card)
-        return true
-    }
-}
-
-// run only by host
-export function runPlayerRemoveFromPile(source, pileStr: string, num: number) {
+export function runPlayerRemoveFromPile(source, pileStr: string, cardIndices: number[]) {
+    console.log(piles.get(pileStr))
     if (!isHost) {
         throw Error("Illegal client access to runPlayerPileEdit()")
     }
@@ -372,11 +371,20 @@ export function runPlayerRemoveFromPile(source, pileStr: string, num: number) {
     }
     if (pile.size == 0) {
         return false
-    } else {
-        let cards = deck.removeCards(num)
-        user.addToHand(...cards)
-        return true
     }
+    if (!turnState.includes("draw") || turn != source) {
+        throw Error("Illegal play from " + users.get(source) + ", not their drawing turn")
+    }
+    let cards;
+    if (pile.settings.removeInOrder) {
+        if (cardIndices.some((v, i) => v != i)) {
+            return false
+        }
+        cards = pile.removeCardsInOrder(cardIndices.length);
+    }
+    user.addToHand(...cards)
+    nextTurnState()
+    return true
 }
 
 // run only by host
@@ -397,6 +405,9 @@ export function runPlayerAddToPile(source, pileStr: string, cardIndices: number[
     if (user.hand.length < cardIndices.length) {
         return false
     }
+    if (!turnState.includes("discard") || turn != source) {
+        throw Error("Illegal play from " + users.get(source) + ", not their discarding turn")
+    }
     if (pile.settings.verify) {
         let action: Action = new Action(cardIndices.map(c => user.hand[c]), user)
         if (turn != source || ![...GameSettings.verifiers.entries()].some(([v, _]) => v.check(action)))  {
@@ -404,7 +415,12 @@ export function runPlayerAddToPile(source, pileStr: string, cardIndices: number[
         }
     }
     let convertedCards = user.playCards(...cardIndices)
-    pile.addCards(...convertedCards)
+    if (GameSettings.delayedDiscard) {
+        cardDiscards.push([pile, convertedCards])
+    } else {
+        pile.addCards(...convertedCards)
+    }
+    nextTurnState()
     return true
 }
 
@@ -420,7 +436,27 @@ function distributeCards() {
 
 export function nextTurn() {
     let userArray = [...users.entries()].map(([k, _]) => k)
+    if (GameSettings.delayedDiscard) {
+        console.log(cardDiscards)
+        cardDiscards.forEach(([k, v]) => {
+            k.addCards(...v)
+            console.log(k)
+        })
+        cardDiscards = []
+    }
     turn = userArray[(userArray.indexOf(turn) + 1) % userArray.length]
+    turnState = GameSettings.turnFlow[0]
+}
+
+// run only by host
+function nextTurnState() {
+    let index = GameSettings.turnFlow.indexOf(turnState)
+    console.log(index)
+    if (index == GameSettings.turnFlow.length - 1) {
+        nextTurn()
+    } else {
+        turnState = GameSettings.turnFlow[index + 1]
+    }
 }
 
 // game networking
@@ -431,10 +467,38 @@ export function requestPileAdd(pile: string, cardIndices: number[]){
         return false
     let data: DataMessage = {
         source: peer.id,
-        type: "play",
-        value: JSON.stringify(cardIndices)
+        type: "pileAdd",
+        value: JSON.stringify({
+            pile: pile, 
+            indices: cardIndices
+        })
     }
-    broadcast(data)
+    if (!isHost) {
+        broadcast(data)
+    } else {
+        runPlayerAddToPile(peer.id, pile, cardIndices)
+        updatePlayPanel()
+        sendGameUpdate()
+    }
+    return true
+}
+
+export function requestPileRemove(pile: string, cardIndices: number[]){ 
+    let data: DataMessage = {
+        source: peer.id,
+        type: "pileRemove",
+        value: JSON.stringify({
+            pile: pile, 
+            indices: cardIndices
+        })
+    }
+    if (!isHost) {
+        broadcast(data)
+    } else {
+        runPlayerRemoveFromPile(peer.id, pile, cardIndices)
+        updatePlayPanel()
+        sendGameUpdate()
+    }
     return true
 }
 
@@ -449,7 +513,8 @@ export function sendGameUpdate() {
             user: u,
             peers: [...others].slice(i, i + 1).map(v => v.peer),
             piles: pileData,
-            turn: turn
+            turn: turn,
+            turnState: turn == u.user.id ? turnState : ["wait"]
         }
         let data: DataMessage = {
             source: peer.id,
@@ -470,7 +535,8 @@ export function getClientSideGameUpdate(){
         user: gameUser,
         peers: [...others].map(v => v.peer),
         piles: pileData,
-        turn: turn
+        turn: turn, 
+        turnState: turn == peer.id ? turnState : ["wait"]
     }
     return gameUpdate
 }
@@ -504,15 +570,20 @@ export function readGameUpdate(data: GameUpdate) {
     gameUser.peer.handSize = data.user.hand.length
     gamePeers = new Map(data.peers.map(p => [p.user.id, p]))
     piles = new Map(data.piles.map(p => {
-        let pileSettings = Pile.CLIENT_SHOWN(-1, p[0][1] !== null);
+        let pileSettings = Pile.CLIENT_SHOWN(-1, p[1][0] !== null);
         let pile: Pile = new Pile(p[0], pileSettings) // these are just display
         if (pileSettings.showFaces) {
+            console.log(p[1]);
             pile.addCards(...[...p[1]].map(c => new Card(c.value, c.suit)))
         } else {
             pile.addCards(...p[1])
         }
         return [p[0], pile]
     }))
+    console.log(data.turn)
     turn = data.turn
+    console.log(data.turnState)
+    turnState = data.turnState
 }
+
 

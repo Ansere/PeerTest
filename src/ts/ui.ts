@@ -1,4 +1,4 @@
-import { Pile, gameUser, getClientSideGameUpdate, initGame, nextTurn, piles, requestPileAdd, runPlayerAddToPile, sendGameUpdate, turn, turnState } from './game.js'
+import { Pile, gameUser, getClientSideGameUpdate, initGame, nextTurn, piles, requestPileAdd, requestPileRemove, runPlayerAddToPile, sendGameUpdate, turn, turnState } from './game.js'
 import { addMessage } from './log.js'
 import { initUser, users, peer, broadcastMessage, isHost, broadcast, DataMessage, host } from './networking.js'
 
@@ -57,24 +57,10 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("cardSubmitButton").onclick = () => {
         let cardIndices = Array.from(document.getElementById("cardPanel").querySelectorAll("input")).map((c, i) : [number, HTMLInputElement] => [i, c]).filter(c => c[1].checked).map(c => c[0]);
         let isSuccessful = requestPileAdd("discard", cardIndices);
-        if (isSuccessful) {
-            (document.getElementById("cardSubmitButton") as HTMLInputElement).disabled = true
-            if (isHost) {
-                runPlayerAddToPile(peer.id, "discard", cardIndices)
-                nextTurn()
-                updatePlayPanel()
-                sendGameUpdate()
-            }
-        } else {
+        if (!isSuccessful) {
             b.Toast.getOrCreateInstance(document.getElementById("illegalPlayToast")).show()
         }
     }
-
-    // card draw init
-    document.getElementById("drawButton").onclick = () => {
-        
-    }
-
 })
 
 export function updateUserPanel(users, user) {
@@ -114,13 +100,17 @@ export function updatePlayPanel() {
         return cardDiv
     }))
     let turnLabel = document.getElementById("turnLabel");
-    (document.getElementById("cardSubmitButton") as HTMLInputElement).disabled = peer.id != turn
+    console.log(turnState);
+    (document.getElementById("cardSubmitButton") as HTMLInputElement).disabled = peer.id != turn || !turnState.includes("discard");
     if (peer.id == turn) {
         turnLabel.innerText = "Your Turn"
     } else {
         turnLabel.innerText = users.get(turn).name + "'s Turn"
     }
-    updatePiles()
+    updatePiles();
+    [].slice.call(document.getElementById("pilePanel").getElementsByTagName("button")).forEach(e => {
+        (e as HTMLInputElement).disabled = peer.id != turn || !turnState.includes("draw");
+    })
 }
 
 export function startGame() {
@@ -154,12 +144,12 @@ function updatePiles() {
         let label = document.createElement("label")
         let div = document.createElement("div")
         let pile = v
-        button.innerText = pile.size > 1 ? "..." : pile.pile[0].toString 
+        button.innerText = pile.size > 1 ? "..." : (pile.size > 0 ? pile.pile[0].toString : "") 
         button.onclick = () => {
-            if (peer.id != turn || turnState != "draw") {
+            if (peer.id != turn || !turnState.includes("draw")) {
                 return;
             }
-            
+            requestPileRemove(k, [0])
         }
         label.innerText = k
         div.appendChild(button)

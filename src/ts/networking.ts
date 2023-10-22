@@ -1,8 +1,8 @@
-import { nextTurn, playerDraw, readGameUpdate, runPlayerAddToPile, runPlayerRemoveFromPile, sendGameUpdate } from "./game.js";
+import { nextTurn, readGameUpdate, runPlayerAddToPile, runPlayerRemoveFromPile, sendGameUpdate } from "./game.js";
 import { addMessage } from "./log.js";
 import { startGame, updateLobbyPanel, updatePlayPanel, updateUserPanel } from "./ui.js";
 
-const dataTypes = ["message", "userInit", "userData", "pileAdd", "pileRemove", "play", "gameUpdate", "startGame"] as const
+const dataTypes = ["message", "userInit", "userData", "pileAdd", "pileRemove", "play", "gameUpdate", "startGame", "error"] as const
 
 let connections = new Map<string, any>()
 export let users = new Map<string, User>()
@@ -88,20 +88,26 @@ let onUserJoin = (c) => { // runs only for host
                 })
             )
         } else if (data.type == "pileAdd") { // we get play info
-            runPlayerAddToPile(data.source, data.value.pile, JSON.parse(data.value.indices))
+            console.log(data)
+            let value = JSON.parse(data.value)
+            let result = runPlayerAddToPile(data.source, value.pile, value.indices)
+            if (!result) {
+                c.send({
+                    source: peer.id,
+                    type: "error",
+                    value: `GameState Mismatch: ${data.source} tried to add to ${data.value.pile} with hand indices ${data.value.indices}`
+                })
+                sendGameUpdate()
+                return;
+            }
             updatePlayPanel()
             sendGameUpdate()
         } else if (data.type == "pileRemove") {
-            runPlayerRemoveFromPile(data.source, data.value.pile, data.value.number)
-            nextTurn() // check turn flow and next turn TODO
+            let value = JSON.parse(data.value)
+            runPlayerRemoveFromPile(data.source, value.pile, value.indices)
             updatePlayPanel()
             sendGameUpdate()
-        } else if (data.type == "draw") {
-            playerDraw(data.source)
-            nextTurn() // check turn flow and next turn TODO
-            updatePlayPanel()
-            sendGameUpdate()
-        } 
+        }
     }); 
     c.on('close', function() {
         users.delete(c.peer)
